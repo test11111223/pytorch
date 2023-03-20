@@ -3978,28 +3978,73 @@ class CollectiveKernel(ExternKernel):
 
         wrapper.writeline(f"_register_tensor_work({output_name}, {output_name}_work)")
 
+class MultiOutputNoSizeAssert(MultiOutput):
+    def codegen(self, wrapper):
+        wrapper.writeline(
+            f"{self.get_name()} = {self.inputs[0].get_name()}{self.index}"
+        )
 
-class AllReduceCoalescedStart(ExternKernel):
-    def __init__(self, layout, inputs, constant_args):
-        super().__init__(None, layout, inputs, constant_args)
+class ForceInPlace(ExternKernel):
+    def codegen(self, wrapper):
+        input_name = self.inputs[0].codegen_reference()
+        output_name = self.get_name()
+        if not wrapper.did_reuse(self, self.inputs[0]):
+            wrapper.writeline(f"{output_name}.copy_({input_name}) #zzno reuse")
+
+    def __init__(self, layout, input):
+        input = self.realize_input(input)
+        super().__init__(None, layout, self.unwrap_storage([input]), ())
         self.name = V.graph.register_buffer(self)
 
     def should_allocate(self):
         return True
 
+class AllReduceCoalesced(ExternKernel):
+    def __init__(self, layout, inputs, constant_args, reduce_op):
+        super().__init__(None, layout, inputs, constant_args)
+        self.reduce_op = reduce_op
+        self.name = V.graph.register_buffer(self)
+
+    def should_allocate(self):
+        return False
+
     @classmethod
-    def create(cls, x: "TensorBox", tag: str, ranks: List[int], group_size: int):
-        x = cls.realize_input(x)
+    def create(cls, inputs: List["TensorBox"], reduce_op: str, tag: str, ranks: List[int], group_size: int):
+        res = []
+        def wrap_input(var):
+            nonlocal res
+            op = ForceInPlace(
+                FlexibleLayout(
+                    var.get_device(),
+                    var.get_dtype(),
+                    var.get_size()
+                ),
+                var
+            )
+            res.append(op)
+            return TensorBox.create(op)
 
-        # is there a difference between literally using x.data.layout below, vs
-        # creating a new one that has the same properties?
-        new_layout = FlexibleLayout(x.get_device(), x.get_dtype(), x.get_size())
+        inputs = list(map(wrap_input, inputs))
 
-        return AllReduceCoalescedStart(
-            layout=new_layout,
-            inputs=[x],
+        layout = MultiOutputLayout(inputs[0].get_device())
+
+        packed = AllReduceCoalesced(
+            layout=layout,
+            inputs=inputs,
             constant_args=[tag, ranks, group_size],
+            reduce_op=reduce_op
         )
+        for i, in_t in enumerate(inputs):
+            res.append(MultiOutputNoSizeAssert(
+                FlexibleLayout(
+                    in_t.get_device(),
+                    in_t.get_dtype(),
+                    in_t.get_size()
+                ),
+                packed,
+                f"[{i}]"
+            ))
+        return res
 
     def codegen(self, wrapper):
         wrapper.add_import_once("import torch.distributed as dist")
@@ -4010,105 +4055,26 @@ class AllReduceCoalescedStart(ExternKernel):
             "from torch.distributed.distributed_c10d import _find_or_create_pg_by_ranks_and_tag"
         )
 
-        # extract references to our args in string form for codegen output
-        input_name = self.inputs[0].codegen_reference()
         output_name = self.get_name()
         tag, ranks, group_size = self.constant_args
 
-        # TODO: avoid more than one ref of the same pg (even though they are cached inside the api)
         wrapper.writeline(
             f"{output_name}_pg = _find_or_create_pg_by_ranks_and_tag('{tag}', {ranks}, {group_size})"
         )
-        if not wrapper.did_reuse(self, self.inputs[0]):
-            wrapper.writeline(f"{output_name}.copy_({input_name})")
 
-        wrapper.writeline(f"{output_name}_buffers = [ {output_name} ]")
+        inputs = []
+        for inp in self.inputs:
+            inputs.append(inp.codegen_reference())
 
-
-class AllReduceCoalescedStep(ExternKernel):
-    def __init__(self, layout, inputs, constant_args):
-        super().__init__(None, layout, inputs, constant_args)
-        self.name = V.graph.register_buffer(self)
-
-    def should_allocate(self):
-        return True
-
-    @classmethod
-    def create(cls, x: "TensorBox", start: "TensorBox"):
-        x = cls.realize_input(x)
-        start = cls.realize_input(start)
-
-        # is there a difference between literally using x.data.layout below, vs
-        # creating a new one that has the same properties?
-        new_layout = FlexibleLayout(x.get_device(), x.get_dtype(), x.get_size())
-
-        return AllReduceCoalescedStep(
-            layout=new_layout,
-            inputs=[x, start],
-            constant_args=[],
-        )
-
-    def codegen(self, wrapper):
-        # extract references to our args in string form for codegen output
-        input_name = self.inputs[0].codegen_reference()
-        output_name = self.get_name()
-        buffs_name = self.inputs[1].codegen_reference()
-
-        if not wrapper.did_reuse(self, self.inputs[0]):
-            wrapper.writeline(f"{output_name}.copy_({input_name})")
-
-        # TODO: avoid more than one ref of the same pg (even though they are cached inside the api)
-        wrapper.writeline(f"{buffs_name}_buffers.append({output_name}) #mid")
-
-
-class AllReduceCoalescedEnd(ExternKernel):
-    def __init__(self, layout, inputs, constant_args, reduce_op):
-        super().__init__(None, layout, inputs, constant_args)
-        self.name = V.graph.register_buffer(self)
-        self.reduce_op = reduce_op
-
-    def should_allocate(self):
-        return True
-
-    @classmethod
-    def create(cls, x: "TensorBox", reduce_op: str, other_ops: List["TensorBox"]):
-        x = cls.realize_input(x)
-        for o in other_ops:
-            cls.realize_input(o)
-        other_ops = list(map(lambda o: cls.realize_input(o), other_ops))
-
-        # is there a difference between literally using x.data.layout below, vs
-        # creating a new one that has the same properties?
-        new_layout = FlexibleLayout(x.get_device(), x.get_dtype(), x.get_size())
-
-        return AllReduceCoalescedEnd(
-            layout=new_layout,
-            inputs=[x] + other_ops,
-            constant_args=[],
-            reduce_op=reduce_op,
-        )
-
-    def codegen(self, wrapper):
-        # extract references to our args in string form for codegen output
-        input_name = self.inputs[0].codegen_reference()
-        start_name = self.inputs[1].codegen_reference()
-        output_name = self.get_name()
-
-        if not wrapper.did_reuse(self, self.inputs[0]):
-            wrapper.writeline(f"{output_name}.copy_({input_name})")
-
-        wrapper.writeline(f"{start_name}_buffers.append({output_name}) #end")
+        wrapper.writeline(f"{output_name} = [{','.join(inputs)}] ")
 
         wrapper.writeline(
             f"{output_name}_work = dist.all_reduce_coalesced("
-            f"{start_name}_buffers,"
-            f"op=_str_to_reduce_op({str(self.reduce_op)}),"
-            f"group={start_name}_pg,"
-            # "async=True)"
+            f"{output_name}, "
+            f"op=_str_to_reduce_op({str(self.reduce_op)}), "
+            f"group={output_name}_pg, "
             "async_op=True)"
         )
-
-        wrapper.writeline(f"_register_tensor_work({start_name}, {output_name}_work)")
 
 
 class AllReduce(CollectiveKernel):

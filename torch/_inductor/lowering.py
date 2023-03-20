@@ -3893,33 +3893,9 @@ try:
 
     @register_lowering(aten.all_reduce_coalesced)
     def all_reduce_coalesced(input, reduce_op, tag, ranks, group_size):
-        result = []
+        result = ir.AllReduceCoalesced.create(input, reduce_op, tag, ranks, group_size)
+        return list(map(TensorBox.create, result))
 
-        for i, input_tensor in enumerate(input):
-            if i == 0:
-                result.append(
-                    TensorBox.create(
-                        ir.AllReduceCoalescedStart.create(
-                            input_tensor, tag, ranks, group_size
-                        )
-                    )
-                )
-            elif i == len(input) - 1:
-                result.append(
-                    TensorBox.create(
-                        ir.AllReduceCoalescedEnd.create(
-                            input_tensor, reduce_op, result.copy()
-                        )
-                    )
-                )
-            else:
-                result.append(
-                    TensorBox.create(
-                        ir.AllReduceCoalescedStep.create(input_tensor, result[0])
-                    )
-                )
-
-        return result
 
     @register_lowering(aten.all_gather_into_tensor)
     def all_gather_into_tensor(shard, tag, ranks, group_size):
