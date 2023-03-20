@@ -3979,17 +3979,27 @@ class CollectiveKernel(ExternKernel):
         wrapper.writeline(f"_register_tensor_work({output_name}, {output_name}_work)")
 
 class MultiOutputNoSizeAssert(MultiOutput):
+    """
+    Extract partial output from a multi-output OP.
+        Works like MultiOutput but doesn't assert size. This must be a property guaranteed by the op emiting this.
+    """
     def codegen(self, wrapper):
         wrapper.writeline(
             f"{self.get_name()} = {self.inputs[0].get_name()}{self.index}"
         )
 
 class ForceInPlace(ExternKernel):
+    """
+    Helper OP to encode an in/out argument that tries to make it inplace whenever possible.
+    Wrap the input of your inplace op to enable this behavior.
+
+    TODO: We should test whether wait_tensor can be a victim of reordering and lead to data races.
+    """
     def codegen(self, wrapper):
         input_name = self.inputs[0].codegen_reference()
         output_name = self.get_name()
         if not wrapper.did_reuse(self, self.inputs[0]):
-            wrapper.writeline(f"{output_name}.copy_({input_name}) #zzno reuse")
+            wrapper.writeline(f"{output_name}.copy_({input_name}) #no reuse")
 
     def __init__(self, layout, input):
         input = self.realize_input(input)
@@ -4075,6 +4085,7 @@ class AllReduceCoalesced(ExternKernel):
             f"group={output_name}_pg, "
             "async_op=True)"
         )
+        wrapper.writeline(f"_register_tensor_work({inputs[0]}, {output_name}_work)")
 
 
 class AllReduce(CollectiveKernel):
