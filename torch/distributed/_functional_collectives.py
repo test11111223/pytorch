@@ -150,6 +150,10 @@ class AsyncCollectiveTensor(torch.Tensor):
     def __repr__(self):
         return f"AsyncCollectiveTensor({self.elem})"
 
+    def trigger_wait(self):
+        self._holder.wait_tensor()
+        return self
+
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
         def unwrap(e: AsyncCollectiveTensor):

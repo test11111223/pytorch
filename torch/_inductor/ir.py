@@ -4081,7 +4081,7 @@ class AllReduceCoalesced(ExternKernel):
         wrapper.writeline(
             f"{output_name}_work = dist.all_reduce_coalesced("
             f"{output_name}, "
-            f"op=_str_to_reduce_op({str(self.reduce_op)}), "
+            f"op=_str_to_reduce_op('{str(self.reduce_op)}'), "
             f"group={output_name}_pg, "
             "async_op=True)"
         )
