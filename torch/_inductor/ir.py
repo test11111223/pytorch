@@ -4009,6 +4009,7 @@ class ForceInPlace(ExternKernel):
     def should_allocate(self):
         return True
 
+
 class AllReduceCoalesced(ExternKernel):
     def __init__(self, layout, inputs, constant_args, reduce_op):
         super().__init__(None, layout, inputs, constant_args)
@@ -4019,17 +4020,19 @@ class AllReduceCoalesced(ExternKernel):
         return False
 
     @classmethod
-    def create(cls, inputs: List["TensorBox"], reduce_op: str, tag: str, ranks: List[int], group_size: int):
+    def create(
+        cls,
+        inputs: List["TensorBox"],
+        reduce_op: str,
+        tag: str,
+        ranks: List[int],
+        group_size: int,
+    ):
         res = []
         def wrap_input(var):
             nonlocal res
             op = ForceInPlace(
-                FlexibleLayout(
-                    var.get_device(),
-                    var.get_dtype(),
-                    var.get_size()
-                ),
-                var
+                FlexibleLayout(var.get_device(), var.get_dtype(), var.get_size()), var
             )
             res.append(op)
             return TensorBox.create(op)
@@ -4042,18 +4045,18 @@ class AllReduceCoalesced(ExternKernel):
             layout=layout,
             inputs=inputs,
             constant_args=[tag, ranks, group_size],
-            reduce_op=reduce_op
+            reduce_op=reduce_op,
         )
         for i, in_t in enumerate(inputs):
-            res.append(MultiOutputNoSizeAssert(
-                FlexibleLayout(
-                    in_t.get_device(),
-                    in_t.get_dtype(),
-                    in_t.get_size()
-                ),
-                packed,
-                f"[{i}]"
-            ))
+            res.append(
+                MultiOutputNoSizeAssert(
+                    FlexibleLayout(
+                        in_t.get_device(), in_t.get_dtype(), in_t.get_size()
+                    ),
+                    packed,
+                    f"[{i}]",
+                )
+            )
         return res
 
     def codegen(self, wrapper):
