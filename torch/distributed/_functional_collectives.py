@@ -360,7 +360,7 @@ def reduce_scatter_tensor(
     return _maybe_wrap_tensor(tensor)
 
 
-def all_reduce_coalesced(self: List[torch.Tensor], reduceOp: str, group: RANK_TYPES, tag: str = ""):
+def all_reduce_coalesced(self: List[torch.Tensor], reduceOp: str, group: RANK_TYPES, tag: str = "") -> List[torch.Tensor]:
     tag, rankset, group_size = _expand_group(group, tag)
     tensor_list = torch._C._nn.all_reduce_coalesced(self, reduceOp, tag, rankset, group_size)  # type: ignore[attr-defined]
 
