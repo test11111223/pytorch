@@ -231,7 +231,7 @@ class TestTraceableCollectives(MultiThreadedTestCase):
 
     @skip_if_lt_x_gpu(1)
     def test_all_reduce_coalesced_eager(self):
-        tensor = torch.ones([4], device=f"cuda")
+        tensor = torch.ones([4], device="cuda")
         mesh = dt.DeviceMesh("cuda", torch.arange(4))
 
         res = ft_c.all_reduce_coalesced([tensor], "sum", mesh)

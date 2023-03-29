@@ -372,7 +372,7 @@ def all_reduce_coalesced(self: List[torch.Tensor], reduceOp: str, group: RANK_TY
     wh = WaitHolder(lookup_tensor)
     for tensor in tensor_list:
         act = AsyncCollectiveTensor(tensor, wh)
-        res.append(act)
+        res.append(res.append(cast(torch.Tensor, act)))
 
     # FIXME we should register all tensors and ref count when to emit the wait
     _register_wrapper_tensor(res[0], lookup_tensor)
