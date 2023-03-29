@@ -1103,6 +1103,8 @@ class _LinalgBackend:
 
 class ConvBackend(Enum): ...
 
+class Tag(Enum): ...
+
 # Defined in `valgrind.h` and `callgrind.h` respectively.
 def _valgrind_supported_platform() -> _bool: ...  # NVALGRIND
 def _valgrind_toggle() -> None: ...  # CALLGRIND_TOGGLE_COLLECT

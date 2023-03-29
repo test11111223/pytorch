@@ -17,26 +17,31 @@ def test_custom_object():
     class Custom(torch.autograd.Function):
         @staticmethod
         def forward(ctx, x):
-            state = torch.get_rng_state()
+            state = torch.cuda.get_rng_state()
             ctx.save_for_backward(x, state)
-            return torch.rand(4, device="cuda") * torch.rand(4, device="cuda") * torch.sin(x)
-        
+            # a = torch.rand_like(x) * torch.rand_like(x)
+            a = torch.rand(16, 32, 48, device="cuda") * torch.rand(48, device="cuda") * torch.sin(x)
+            torch.cuda.set_rng_state(state)
+            # a = torch.rand_like(x) * torch.rand_like(x) * a
+            a = torch.rand(16, 32, 48, device="cuda") * torch.rand(16, 32, 48, device="cuda") * a
+            return a
+
         @staticmethod
         def backward(ctx, grad_out):
             x, state = ctx.saved_tensors
-            torch.set_rng_state(state)
-            return grad_out * torch.rand(4, device="cuda") * torch.cos(x)
+            torch.cuda.set_rng_state(state)
+            return grad_out * torch.rand_like(grad_out) * torch.cos(x)
 
 
 
     custom = Custom.apply
 
-    x = torch.rand(4, device="cuda", requires_grad=True)
+    x = torch.rand(16, 32, 48, device="cuda", requires_grad=True)
     aot_custom = aot_function(custom, print_compile)
 
     # Both forward
     loss = aot_custom(x).sum()
-    torch.manual_seed(10)
+    torch.manual_seed(16)
     loss.backward()
 
 
@@ -56,10 +61,10 @@ def test_rst_state_in_between():
 
 
 def test_negative_testing():
-    torch.manual_seed(10)
+    torch.manual_seed(16)
     bad_state = torch.cuda.get_rng_state()
     def fn(x):
-        torch.manual_seed(20)
+        torch.manual_seed(32)
         x = torch.sin(x)
         x = x + torch.rand(4, device="cuda")
         torch.cuda.set_rng_state(bad_state)
@@ -107,7 +112,7 @@ def test_checkpointing():
     print_rng_seed_and_offset()
     aot_mod(x).sum().backward()
 
-    for _ in range(10):
+    for _ in range(16):
         print_rng_seed_and_offset()
         aot_mod(x).sum().backward()
     # opt_mod = torch.compile(fn, backend="aot_eager_decomp_partition")
