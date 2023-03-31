@@ -1243,15 +1243,17 @@ class TestQuantizeEagerONNXExport(common_utils.TestCase):
 
     @pytorch_test_common.skipIfNoCuda
     def test_aten_device_with_index(self):
-        from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-small")
         model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-small")
         model = torch.compile(model, backend="onnxrt")
         model = model.eval()
-        device = "cuda"
+        device = "cuda:0"
         model = model.to(device)
-        ids = tokenizer.batch_encode_plus(["This is a test"], return_tensors="pt").to(device)
+        ids = tokenizer.batch_encode_plus(["This is a test"], return_tensors="pt").to(
+            device
+        )
 
         with torch.no_grad():
             _ = model(
