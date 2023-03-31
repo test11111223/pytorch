@@ -857,6 +857,21 @@ Tensor _nested_view_from_buffer(
     storage_offsets);
 }
 
+Tensor _nested_from_buffer_unchecked(
+    const Tensor& buffer,
+    const Tensor& nested_sizes,
+    const Tensor& nested_strides,
+    const Tensor& storage_offsets,
+    const int64_t dim) {
+  return at::detail::make_tensor<NestedTensorImpl>(
+    buffer,
+    nested_sizes,
+    nested_strides,
+    storage_offsets,
+    /*validate_metadata=*/ false,
+    dim);
+}
+
 // See Note [Special size rule for nested tensor]
 Tensor reshape_nested(const Tensor& self, IntArrayRef proposed_shape) {
   TORCH_CHECK(

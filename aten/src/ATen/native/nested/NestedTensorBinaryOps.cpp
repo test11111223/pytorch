@@ -174,6 +174,13 @@ Tensor NestedTensor_add_Tensor(
       });
 }
 
+Tensor NestedTensor_add_Tensor_meta(
+    const Tensor& self,
+    const Tensor& other,
+    const Scalar& alpha) {
+  return at::empty_like(self);
+}
+
 Tensor NestedTensor_mul_Tensor(const Tensor& self, const Tensor& other) {
   return NestedTensor_elementwise_Tensor(
       self, other, "mul", false /* supports_striding*/, [](const Tensor& b1, const Tensor& b2) {

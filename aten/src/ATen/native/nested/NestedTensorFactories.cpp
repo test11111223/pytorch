@@ -56,7 +56,7 @@ Tensor empty_like_nested(
   auto nested_strides = self_nt->get_nested_strides().clone();
   auto offsets = self_nt->get_storage_offsets().clone();
   auto tensor = detail::make_tensor_base<NestedTensorImpl>(
-      new_buffer, nested_size, nested_strides, offsets);
+      new_buffer, nested_size, nested_strides, offsets, /*validate_metadata=*/ false, self.dim());
   return tensor;
 }
 

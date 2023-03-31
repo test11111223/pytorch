@@ -25,6 +25,8 @@ from torch.testing._internal.common_utils import (
     skipIfSlowGradcheckEnv,
     subtest,
     TestCase,
+    TEST_WITH_CROSSREF,
+    expectedFailureIf
 )
 
 # Tests are ported from pytorch/nestedtensor.
@@ -96,8 +98,66 @@ def random_nt(device, dtype, num_tensors, max_dims, min_dims=None):
         ts1.append(t1)
     return torch.nested.nested_tensor(ts1, device=device, dtype=dtype)
 
+def define_crossref_xfails():
+    # These all fail because they call _nested_tensor_from_tensor_list(), which
+    # isn't supported.
+    crossref_xfails = [
+        "TestNestedTensor.test_2d*",
+        "TestNestedTensor.test_3d*",
+        "TestNestedTensor.test_copy_",
+        "TestNestedTensor.test_default_nested_tensor",
+        "TestNestedTensor.test_dim",
+        "TestNestedTensor.test_fill_",
+        "TestNestedTensor.test_is_contiguous",
+        "TestNestedTensor.test_like_functions*",
+        "TestNestedTensor.test_nested_namespace",
+        "TestNestedTensor.test_nested_tensor_matching_dim",
+        "TestNestedTensor.test_numel",
+        "TestNestedTensor.test_repr_string",
+        "TestNestedTensor.test_size",
+        "TestNestedTensor.test_size_dim",
+        "TestNestedTensor.test_stride",
+        "TestNestedTensor.test_to",
+        "TestNestedTensor.test_to_padded_tensor_on_empty_tensor",
+        "TestNestedTensor.test_unbind_*",
+        "TestNestedTensor.test_unbind_dim",
+        "TestNestedTensor.test_zero_",
+    ]
+    expectedFailureIfCrossRef = expectedFailureIf(TEST_WITH_CROSSREF)
+    for full_test_name in crossref_xfails:
+        test_cls_name, test_name = full_test_name.split('.')
+        test_cls = globals().get(test_cls_name)
+        if test_name.endswith('*'):
+            # Decorate all tests that match the prefix
+            for cls_attr in set(test_cls.__dict__.keys()):
+                if cls_attr.startswith(test_name[:-1]):
+                    test = getattr(test_cls, cls_attr)
+                    expectedFailureIfCrossRef(test)
+
+        else:
+            test = getattr(test_cls, test_name)
+            expectedFailureIfCrossRef(test)
+
+class CrossRefNestedFakeMode(torch._subclasses.CrossRefFakeMode):
+    def __init__(self):
+        super().__init__(
+            self.ignore_op, check_strides=True,
+            check_aliasing=False,
+        )  # TODO: enable alias checking
+
+    @staticmethod
+    def ignore_op(func):
+        return False
+
 
 class TestNestedTensor(TestCase):
+    def run(self, result=None):
+        if TEST_WITH_CROSSREF:
+            with CrossRefNestedFakeMode():
+                return super().run(result)
+        else:
+            return super().run(result)
+
     @parametrize("batch_size", [2, 4])
     @parametrize("max_seq_len", [3, 5])
     @parametrize("vocab_size", [10, 20])
@@ -2553,6 +2613,7 @@ class TestNestedTensorAutograd(TestCase):
 instantiate_parametrized_tests(TestNestedTensor)
 instantiate_device_type_tests(TestNestedTensorDeviceType, globals())
 instantiate_device_type_tests(TestNestedTensorAutograd, globals())
+define_crossref_xfails()
 
 if __name__ == '__main__':
     run_tests()
