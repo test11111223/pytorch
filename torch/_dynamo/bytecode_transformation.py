@@ -1,3 +1,4 @@
+import bisect
 import dataclasses
 import dis
 import itertools
@@ -13,6 +14,27 @@ from .bytecode_analysis import (
 
 
 @dataclasses.dataclass
+class InstructionExnTabEntry:
+    start: "Instruction"
+    end: "Instruction"
+    target: "Instruction"
+    depth: int
+    lasti: bool
+
+    @staticmethod
+    def short_inst_repr(inst: "Instruction"):
+        return f"Instruction(opname={inst.opname}, offset={inst.offset})"
+
+    def __repr__(self):
+        return (
+            f"InstructionExnTabEntry(start={self.short_inst_repr(self.start)}, "
+            f"end={self.short_inst_repr(self.end)}, "
+            f"target={self.short_inst_repr(self.target)}, "
+            f"depth={self.depth}, lasti={self.lasti}"
+        )
+
+
+@dataclasses.dataclass
 class Instruction:
     """A mutable version of dis.Instruction"""
 
@@ -25,6 +47,7 @@ class Instruction:
     is_jump_target: bool = False
     # extra fields to make modification easier:
     target: Optional["Instruction"] = None
+    exn_tab_entry: Optional[InstructionExnTabEntry] = None
 
     def __hash__(self):
         return id(self)
@@ -289,6 +312,81 @@ def linetable_311_writer(first_lineno):
     return linetable, update
 
 
+@dataclasses.dataclass
+class ExceptionTableEntry:
+    start: int
+    end: int
+    target: int
+    depth: int
+    lasti: bool
+
+
+def encode_exn_tab_varint(n):
+    # unfortunately cannot use encode_varint since the order of
+    # the bytes is reversed for exception tables.
+    assert n >= 0
+    b = [n & 63]
+    n >>= 6
+    while n > 0:
+        b.append(n & 63)
+        n >>= 6
+    b = list(reversed(b))
+    for i in range(len(b) - 1):
+        b[i] |= 64
+    return b
+
+
+def decode_exn_tab_varint(bytes_iter):
+    b = next(bytes_iter)
+    val = b & 63
+    while b & 64:
+        val <<= 6
+        b = next(bytes_iter)
+        val |= b & 63
+    return val
+
+
+def check_exception_table(tab: List[ExceptionTableEntry]):
+    for i in range(len(tab) - 1):
+        assert tab[i].start <= tab[i].end < tab[i + 1].start <= tab[i + 1].end
+
+
+def parse_exception_table(exntab: bytes):
+    """
+    Parse the exception table according to
+    https://github.com/python/cpython/blob/3.11/Objects/exception_handling_notes.txt
+    """
+    exntab_iter = iter(exntab)
+    tab = []
+    try:
+        while True:
+            start = decode_exn_tab_varint(exntab_iter) * 2
+            length = decode_exn_tab_varint(exntab_iter) * 2
+            end = start + length - 2
+            target = decode_exn_tab_varint(exntab_iter) * 2
+            dl = decode_exn_tab_varint(exntab_iter)
+            depth = dl >> 1
+            lasti = bool(dl & 1)
+            tab.append(ExceptionTableEntry(start, end, target, depth, lasti))
+    except StopIteration:
+        check_exception_table(tab)
+        return tab
+
+
+def assemble_exception_table(tab: List[ExceptionTableEntry]):
+    b = []
+    for entry in tab:
+        first_entry = encode_exn_tab_varint(entry.start // 2)
+        first_entry[0] |= 1 << 7
+        b.extend(first_entry)
+        length = entry.end - entry.start + 2
+        b.extend(encode_exn_tab_varint(length // 2))
+        b.extend(encode_exn_tab_varint(entry.target // 2))
+        dl = (entry.depth << 1) + entry.lasti
+        b.extend(encode_exn_tab_varint(dl))
+    return bytes(b)
+
+
 def assemble(instructions: List[Instruction], firstlineno):
     """Do the opposite of dis.get_instructions()"""
     code = []
@@ -326,16 +424,20 @@ def assemble(instructions: List[Instruction], firstlineno):
     return bytes(code), bytes(lnotab)
 
 
+def _get_instruction_by_offset(offset_to_inst: Dict[int, Instruction], offset: int):
+    for n in (0, 2, 4, 6):
+        if offset_to_inst[offset + n].opcode != dis.EXTENDED_ARG:
+            return offset_to_inst[offset + n]
+    return None
+
+
 def virtualize_jumps(instructions):
     """Replace jump targets with pointers to make editing easier"""
     jump_targets = {inst.offset: inst for inst in instructions}
 
     for inst in instructions:
         if inst.opcode in dis.hasjabs or inst.opcode in dis.hasjrel:
-            for offset in (0, 2, 4, 6):
-                if jump_targets[inst.argval + offset].opcode != dis.EXTENDED_ARG:
-                    inst.target = jump_targets[inst.argval + offset]
-                    break
+            inst.target = _get_instruction_by_offset(jump_targets, inst.argval)
 
 
 _REL_JUMPS = set(dis.hasjrel)
@@ -354,6 +456,16 @@ def flip_jump_direction(instruction):
     assert instruction.opcode in _REL_JUMPS
 
 
+def _get_instruction_front(instructions: List[Instruction], idx: int):
+    target = instructions[idx]
+    for offset in (1, 2, 3):
+        if idx >= offset and instructions[idx - offset].opcode == dis.EXTENDED_ARG:
+            target = instructions[idx - offset]
+        else:
+            break
+    return target
+
+
 def devirtualize_jumps(instructions):
     """Fill in args for virtualized jump target after instructions may have moved"""
     indexof = {id(inst): i for i, inst, in enumerate(instructions)}
@@ -361,17 +473,7 @@ def devirtualize_jumps(instructions):
 
     for inst in instructions:
         if inst.opcode in jumps:
-            target = inst.target
-            target_index = indexof[id(target)]
-            for offset in (1, 2, 3):
-                if (
-                    target_index >= offset
-                    and instructions[target_index - offset].opcode == dis.EXTENDED_ARG
-                ):
-                    target = instructions[target_index - offset]
-                else:
-                    break
-
+            target = _get_instruction_front(instructions, indexof[id(inst.target)])
             if inst.opcode in dis.hasjabs:
                 if sys.version_info < (3, 10):
                     inst.arg = target.offset
@@ -400,6 +502,72 @@ def devirtualize_jumps(instructions):
                     inst.arg //= 2
             inst.argval = target.offset
             inst.argrepr = f"to {target.offset}"
+
+
+def virtualize_exception_table(exn_tab_bytes: bytes, instructions: List[Instruction]):
+    """Replace exception table entries with pointers to make editing easier"""
+    exn_tab = parse_exception_table(exn_tab_bytes)
+    offset_to_inst = {inst.offset: inst for inst in instructions}
+    offsets = sorted(offset_to_inst.keys())
+    exn_tab_iter = iter(exn_tab)
+    try:
+        entry, inst_entry = None, None
+
+        def step():
+            nonlocal entry, inst_entry
+            entry = next(exn_tab_iter)
+            # find rightmost offset <= entry.end
+            end_offset_idx = bisect.bisect_right(offsets, entry.end)
+            assert end_offset_idx > 0
+            end_offset = offsets[end_offset_idx - 1]
+            inst_entry = InstructionExnTabEntry(
+                _get_instruction_by_offset(offset_to_inst, entry.start),
+                _get_instruction_by_offset(offset_to_inst, end_offset),
+                _get_instruction_by_offset(offset_to_inst, entry.target),
+                entry.depth,
+                entry.lasti,
+            )
+
+        step()
+        for inst in instructions:
+            while inst.offset > entry.end:
+                step()
+            if inst.offset >= entry.start:
+                inst.exn_tab_entry = inst_entry
+    except StopIteration:
+        pass
+
+
+def compute_exception_table(
+    instructions: List[Instruction],
+) -> List[ExceptionTableEntry]:
+    """Compute pythonic exception table from instructions with exn_tab_entry's"""
+    exn_dict = {}
+    indexof = {id(inst): i for i, inst, in enumerate(instructions)}
+
+    for inst in instructions:
+        if inst.exn_tab_entry:
+            start = _get_instruction_front(
+                instructions, indexof[id(inst.exn_tab_entry.start)]
+            ).offset
+            end = (
+                inst.exn_tab_entry.end.offset
+                + instruction_size(inst.exn_tab_entry.end)
+                - 2
+            )
+            target = _get_instruction_front(
+                instructions, indexof[id(inst.exn_tab_entry.target)]
+            ).offset
+            key = (start, end)
+            val = (target, inst.exn_tab_entry.depth, inst.exn_tab_entry.lasti)
+            if key in exn_dict:
+                assert exn_dict[key] == val
+            exn_dict[key] = val
+
+    keys_sorted = sorted(exn_dict.keys())
+    exn_tab = [ExceptionTableEntry(*key, *exn_dict[key]) for key in keys_sorted]
+    check_exception_table(exn_tab)
+    return exn_tab
 
 
 def strip_extended_args(instructions: List[Instruction]):
@@ -715,8 +883,9 @@ def clean_and_assemble_instructions(
         "co_posonlyargcount"
     }
     if sys.version_info >= (3, 11):
-        # generated code doesn't contain exceptions, so leave exception table empty
-        code_options["co_exceptiontable"] = b""
+        code_options["co_exceptiontable"] = assemble_exception_table(
+            compute_exception_table(instructions)
+        )
     return instructions, types.CodeType(*[code_options[k] for k in keys])
 
 
@@ -728,9 +897,10 @@ def populate_kw_names_argval(instructions, consts):
 
 def cleaned_instructions(code, safe=False):
     instructions = list(map(convert_instruction, dis.get_instructions(code)))
+    check_offsets(instructions)
     if sys.version_info >= (3, 11):
         populate_kw_names_argval(instructions, code.co_consts)
-    check_offsets(instructions)
+        virtualize_exception_table(code.co_exceptiontable, instructions)
     virtualize_jumps(instructions)
     strip_extended_args(instructions)
     if not safe:

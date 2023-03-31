@@ -85,7 +85,7 @@ class ReenterWith:
                 *reset,
                 create_instruction("END_FINALLY"),
             ]
-        else:
+        elif sys.version_info < (3, 11):
             epilogue = [
                 create_instruction("POP_BLOCK"),
                 *reset,
@@ -93,6 +93,19 @@ class ReenterWith:
                 except_jump_target,
                 *reset,
                 create_instruction("RERAISE"),
+                cleanup_complete_jump_target,
+            ]
+        else:
+            epilogue = [
+                *reset,
+                create_instruction("JUMP_FORWARD", target=cleanup_complete_jump_target),
+                except_jump_target,
+                create_instruction("PUSH_EXC_INFO"),
+                *reset,
+                create_instruction("RERAISE", 0),
+                create_instruction("COPY", 3),
+                create_instruction("POP_EXCEPT"),
+                create_instruction("RERAISE", 1),
                 cleanup_complete_jump_target,
             ]
 
@@ -187,7 +200,9 @@ class ReenterWith:
                 cleanup_complete_jump_target,
             ] + cleanup
 
-            return create_call_function(0, False) + [
+            return [
+                *load_args,
+                *create_call_function(len(load_args), True),
                 create_instruction("BEFORE_WITH"),
                 create_instruction("POP_TOP"),
             ]
@@ -261,7 +276,6 @@ class ContinueExecutionCache:
             code_options["co_flags"] = code_options["co_flags"] & ~(
                 CO_VARARGS | CO_VARKEYWORDS
             )
-            # TODO probably need to update co_exceptiontable for python 3.11
             (target,) = [i for i in instructions if i.offset == offset]
 
             prefix = []

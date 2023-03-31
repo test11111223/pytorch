@@ -1,5 +1,6 @@
 import collections
 import contextlib
+import copy
 import dataclasses
 import dis
 import functools
@@ -102,7 +103,6 @@ def _step_logger():
 
 @dataclasses.dataclass
 class BlockStackEntry:
-    id: int
     target: Instruction
     stack_index: Optional[int] = None
     with_context: ContextWrappingVariable = None
@@ -397,7 +397,12 @@ def break_graph_if_unsupported(*, push):
                     create_call_function(inst.arg, False)
                 )
             else:
-                self.output.add_output_instructions([inst])
+                # copy instruction, but without exception table data
+                assert inst.target is None
+                inst_copy = copy.copy(inst)
+                inst_copy.exn_tab_entry = None
+                self.output.add_output_instructions([inst_copy])
+
             self.output.add_output_instructions(cleanup)
 
             if sys.version_info >= (3, 11) and inst.opname == "CALL":
@@ -553,6 +558,32 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
 
         if len(self.stack) == 0 and self.should_compile_partial_graph():
             self.checkpoint = inst, self.copy_graphstate()
+
+        # Handle blocks in Python 3.11
+        if sys.version_info >= (3, 11):
+            entry = inst.exn_tab_entry
+            if not (
+                # still in the same block
+                self.block_stack
+                and entry
+                and self.block_stack[-1].target is entry.target
+            ):
+                # entry is outside of most recent block
+                if (
+                    not entry
+                    or len(self.block_stack) > 1
+                    and entry
+                    and self.block_stack[-2].target is entry.target
+                ):
+                    # inst in previous block or no longer in a block - pop the current block
+                    if self.block_stack:
+                        self.block_stack.pop()
+                else:
+                    # push block to stack - note, BEFORE_WITH blocks won't
+                    # be pushed here since BEFORE_WITH pushes the block, and
+                    # the current instruction would be counted as being in that block.
+                    # self.block_stack.append(BlockStackEntry(entry.target))
+                    pass
 
         log.debug(f"TRACE {inst.opname} {inst.argval} {self.stack}")
 
@@ -869,11 +900,11 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
 
     def SETUP_LOOP(self, inst):
         # only exists in python<=3.7
-        self.block_stack.append(BlockStackEntry(0, inst.target))
+        self.block_stack.append(BlockStackEntry(inst.target))
 
     def SETUP_EXCEPT(self, inst):
         # only exists in python<=3.7
-        self.block_stack.append(BlockStackEntry(0, inst.target))
+        self.block_stack.append(BlockStackEntry(inst.target))
 
     def POP_BLOCK(self, inst):
         self.block_stack.pop()
@@ -885,12 +916,10 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         self.output.guards.update(ctx.guards)
 
         if isinstance(self, InstructionTranslator):
-            self.block_stack.append(
-                BlockStackEntry(0, inst.target, len(self.stack), ctx)
-            )
+            self.block_stack.append(BlockStackEntry(inst.target, len(self.stack), ctx))
         else:
             # can't restore this while inlining
-            self.block_stack.append(BlockStackEntry(0, inst.target))
+            self.block_stack.append(BlockStackEntry(inst.target))
         self.push(
             WithExitFunctionVariable(
                 ctx,
@@ -901,7 +930,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         self.push(ctx.enter(self))
 
     def SETUP_FINALLY(self, inst):
-        self.block_stack.append(BlockStackEntry(0, inst.target))
+        self.block_stack.append(BlockStackEntry(inst.target))
 
     def BEGIN_FINALLY(self, inst):
         self.push(None)
@@ -1571,13 +1600,6 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             kwargs = {}
         self.call_function(fn, args, kwargs)
         self.kw_names = None
-        # 3.11 removed POP_BLOCK, so we manually pop the block stack here
-        if (
-            isinstance(fn, WithExitFunctionVariable)
-            and len(self.block_stack) > 0
-            and id(fn) == self.block_stack[-1].id
-        ):
-            self.block_stack.pop()
 
     def COPY(self, inst):
         self.push(self.stack[-inst.arg])
@@ -1610,12 +1632,10 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         # 3.11 no longer uses a block stack, but we still keep track of one
         # so that we know which contexts are currently active.
         if isinstance(self, InstructionTranslator):
-            self.block_stack.append(
-                BlockStackEntry(id(exit), inst.target, len(self.stack), ctx)
-            )
+            self.block_stack.append(BlockStackEntry(inst.target, len(self.stack), ctx))
         else:
             # can't restore this while inlining
-            self.block_stack.append(BlockStackEntry(id(exit), inst.target))
+            self.block_stack.append(BlockStackEntry(inst.target))
 
         self.push(exit)
         self.push(ctx.enter(self))
