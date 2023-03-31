@@ -179,9 +179,11 @@ class TestFakeDistributedSingleProc(torch._dynamo.test_case.TestCase):
     @patch.object(config, "optimize_ddp", True)
     @patch.object(torch._inductor.config, "fallback_random", True)
     def test_hf_bert_ddp_inductor(self):
-        model, inputs = get_hf_bert(0)
-        model = FakeDDP(model)
-        run_hf_bert_ddp(self, model, inputs, "inductor")
+
+        with _dynamo_dist_per_rank_init(self.rank, self.world_size):
+            model, inputs = get_hf_bert(self.rank)
+            model = DDP(model)
+            run_hf_bert_ddp(self, model, inputs, "inductor")
 
     @patch.object(config, "optimize_ddp", True)
     def test_hf_bert_ddp_aot_eager(self):
