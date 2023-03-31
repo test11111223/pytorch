@@ -1152,16 +1152,26 @@ class CUDAGraphTreeManager:
         self.forwards_with_pending_backwards: int = 0
 
     def run(self, new_inputs: List[Tensor], function_id: FunctionID):
+        out = self._run(new_inputs, function_id)
+
+        # The forwards are only pending following invocation, not before
         mode = self.id_to_mode[function_id]
         if mode == CompilationMode.FORWARD:
             self.forwards_with_pending_backwards += 1
         elif mode == CompilationMode.BACKWARD:
             self.forwards_with_pending_backwards -= 1
 
+        return out
+
+    def _run(self, new_inputs: List[Tensor], function_id: FunctionID):
         # we will try to end the current execution lazily, since
         # we dont want to do unnecessary checking of the existing outputs
         # on the hot path, but both recording and warmup only happen once
         # so we check up front
+
+        if function_id == 0:
+            breakpoint()
+
         if self.in_recording:
             self.try_end_curr_recording()
 
@@ -1222,6 +1232,7 @@ class CUDAGraphTreeManager:
 
     def record_function(self, new_inputs, function_id) -> List[Optional[Tensor]]:
         torch.cuda.synchronize()
+        print(f"Recording {function_id}")
         node = CUDAGraphNode(
             self.ids_to_funcs[function_id],
             self.new_graph_id(),
@@ -1321,9 +1332,8 @@ class CUDAGraphTreeManager:
         return GenerationTracker.generation
 
     def can_start_new_generation(self) -> bool:
-        if self.forwards_with_pending_backwards != 0:
-            return False
-
+        # if self.forwards_with_pending_backwards != 0:
+        #     return False
         return self.current_gen != self.get_curr_generation()
 
     def try_end_curr_recording(self) -> None:
@@ -1379,8 +1389,8 @@ class CUDAGraphTreeManager:
         deleted = set()
         for t, stack_trace in self.current_node.path_live_weakrefs_and_stacktraces():
             if t() and t() not in deleted:
-                deleted.add(t())
                 torch._C._free_And_Remove_DeleterFn(t())
+                deleted.add(t())
                 stack_trace = (
                     stack_trace.strip()
                     if stack_trace
