@@ -2293,7 +2293,7 @@ static const std::vector<OperatorGeneratorArgs> opGenArgs1{
         },
         aliasAnalysisFromSchema()),
     OperatorGeneratorArgs(
-        TORCH_SELECTIVE_SCHEMA("aten::device(str type, int index) -> Device"),
+        TORCH_SELECTIVE_SCHEMA("aten::device.with_index(str type, int index) -> Device"),
         device_with_index,
         aliasAnalysisFromSchema()),
     OperatorGeneratorArgs(
