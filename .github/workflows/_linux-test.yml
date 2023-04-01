@@ -183,6 +183,8 @@ jobs:
           # shellcheck disable=SC2086,SC2090
           container_name=$(docker run \
             ${GPU_FLAG:-} \
+            -e NCCL_ASYNC_ERROR_HANDLING=1 \
+            -e NCCL_DESYNC_DEBUG=1 \
             -e TORCH_CPP_LOG_LEVEL="ERROR" \
             -e TORCH_DISTRIBUTED_DEBUG="DETAIL" \
             -e NCCL_DEBUG="WARN" \
