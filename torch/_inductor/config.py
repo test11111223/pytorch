@@ -63,6 +63,9 @@ search_autotune_cache = os.environ.get("TORCHINDUCTOR_SEARCH_AUTOTUNE_CACHE") ==
 # We will disable creating subprocess for autotuning if this is False
 autotune_in_subproc = os.environ.get("TORCHINDUCTOR_AUTOTUNE_IN_SUBPROC") == "1"
 
+
+coordinate_descent_tuning = os.environ.get("TORCHINDUCTOR_COORDINATE_DESCENT_TUNING") == "1"
+
 # control store vs recompute heuristic
 # For fanouts, rematearialization can lead to exponential blowup. So, have
 # smaller threshold
@@ -246,6 +249,9 @@ class triton:
     # NOTE: mobilevit_s in timm_models required X to be set to the higher value 2048
     max_block = {"X": 2048, "Y": 1024, "Z": 1024}
 
+    mathlib_name = "libdevice" if is_fbcode() else "math"
+
+# triton.persistent_reductions = False # TODO use a flag
 
 # create a directory containing lots of debug information
 class trace:
