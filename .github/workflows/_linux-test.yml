@@ -183,8 +183,8 @@ jobs:
           # shellcheck disable=SC2086,SC2090
           container_name=$(docker run \
             ${GPU_FLAG:-} \
-            -e TORCH_CPP_LOG_LEVEL="INFO" \
-            -e TORCH_DISTRIBUTED_DEBUG="INFO" \
+            -e TORCH_CPP_LOG_LEVEL="ERROR" \
+            -e TORCH_DISTRIBUTED_DEBUG="DETAIL" \
             -e NCCL_DEBUG="WARN" \
             -e NCCL_DEBUG_SUBSYS="INIT,P2P" \
             -e NCCL_P2P_DISABLE=1 \
