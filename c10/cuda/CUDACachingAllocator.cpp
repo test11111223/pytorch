@@ -298,6 +298,9 @@ struct ExpandableSegment {
     if (begin == end) {
       return rangeFromHandles(begin, end);
     }
+
+    std::cout << "MAP " << (void*) ptr() << " " << begin << " " << end << "\n";
+
     while (end > handles_.size()) {
       handles_.push_back(std::nullopt);
     }
@@ -380,6 +383,7 @@ struct ExpandableSegment {
   }
 
   void unmapHandles(size_t begin, size_t end) {
+    std::cout << "UNMAP " << (void*) ptr() << " " << begin << " " << end << "\n";
     // note: unlike cudaFree, MemUnmap and MemRelease do
     // not appear to synchronize in all cases, so we have to wait for the
     // stream to finish before this memory is truly free.
