@@ -26,7 +26,8 @@ from torch.fx.experimental.proxy_tensor import is_sym_node, py_sym_types
 from torch.fx.experimental.symbolic_shapes import ShapeEnv
 from torch.multiprocessing.reductions import StorageWeakRef
 from torch.nn.utils import stateless
-from .functional_rng_ops import PhiloxRandomState, FunctionalizeRngOpsMode
+# from .functional_rng_ops import PhiloxRandomState, FunctionalizeRngOpsMode, rng_decompositions
+from torch._decomp.decompositions_for_rng import PhiloxRandomState, rng_decompositions
 from . import config
 from .partitioners import default_partition
 from torch._guards import TracingContext, DuplicateInputs, Source
@@ -2291,15 +2292,15 @@ def create_functionalized_rng_ops_wrapper(func, args, trace_joint=True):
     def traced_joint(primals, tangents, fwd_seed, fwd_base_offset, bwd_seed, bwd_base_offset):
         with patch(torch.cuda, "get_rng_state", override_get_rng_state):
             with patch(torch.cuda, "set_rng_state", override_set_rng_state):
-                with FunctionalizeRngOpsMode():
-                    out =  func(primals, tangents)
+                # with FunctionalizeRngOpsMode():
+                out =  func(primals, tangents)
         return out
 
     def traced_forward(*primals, fwd_seed, fwd_base_offset):
         with patch(torch.cuda, "get_rng_state", override_get_rng_state):
             with patch(torch.cuda, "set_rng_state", override_set_rng_state):
-                with FunctionalizeRngOpsMode():
-                    return func(primals)
+                # with FunctionalizeRngOpsMode():
+                return func(primals)
 
     PhiloxRandomState.reset()
     # Get the current seed and offset to setup tracing.
@@ -2713,6 +2714,9 @@ def create_aot_dispatcher_function(
 
     if aot_config.decompositions is None:
         aot_config.decompositions = {}
+
+    if config.functionalize_rng_ops:
+        aot_config.decompositions.update(rng_decompositions)
 
     aot_config.decompositions = {
         **aot_autograd_decompositions,

@@ -7,82 +7,17 @@ from torch.fx.experimental.proxy_tensor import (
 from torch._subclasses.fake_tensor import disable_fake_tensor_mode_tracing
 from typing import Tuple
 from torch.types import _device, _dtype
-from torch.fx.operator_schemas import normalize_function
+import torch._decomp as decomp
+from .._prims.rng_prims import philox_rand
 
 
 aten = torch.ops.aten
+rng_decompositions = {}
+
+def register_decomposition(aten_op):
+    return decomp.register_decomposition(aten_op, rng_decompositions)
 
 
-def get_default_stride(size):
-    """
-    A helper function to get the strides for a contiguous tensor of a given
-    shape.
-    """
-    stride = [1] * len(size) + [1]
-    for idx in reversed(range(len(size))):
-        stride[idx] = stride[idx + 1] * size[idx]
-    stride = stride[1:]
-    return stride
-
-
-# New RNG ops
-def _philox_rand(
-    shape: torch.Size,
-    seed: torch.Tensor,
-    offset: torch.Tensor,
-    stride: Tuple[int, ...],
-    device: _device,
-    dtype: _dtype,
-):
-    # FIXME - Need to add a nondeterministic_seeded tag to this op. Not sure how to do that yet.
-    stride = tuple(stride)
-    with torch.random.fork_rng(
-        devices=[
-            device,
-        ]
-    ):
-        torch.manual_seed(seed)
-        full_size = list(shape) + [stride[-1]]
-        full_stride = stride + (1,)
-        for i in reversed(range(len(full_stride))):
-            if i == 0:
-                full_size[i] = shape[0]
-            else:
-                assert full_stride[i - 1] % full_stride[i] == 0
-                full_size[i] = full_stride[i - 1] // full_stride[i]
-
-        for i in range(len(full_stride)):
-            if offset % full_stride[i] == 0:
-                full_size[i] += offset // full_stride[i]
-                break
-        else:
-            assert False
-
-        return torch.rand(full_size, device=device, dtype=dtype).as_strided(
-            shape, stride, offset
-        )
-
-
-def _philox_rand_meta(
-    shape: torch.Size,
-    seed: torch.Tensor,
-    offset: torch.Tensor,
-    stride: Tuple[int, ...],
-    device: _device,
-    dtype: _dtype,
-):
-    # TODO - Update the state here
-    return _prims.TensorMeta(shape=shape, strides=stride, dtype=dtype, device=device)
-
-
-philox_rand = _prims._make_prim(
-    schema="philox_rand(int[] size, Tensor seed, Tensor offset, int[] stride, Device? device=None, ScalarType? dtype=None) -> Tensor",
-    return_type=_prims.RETURN_TYPE.NEW,
-    meta=_philox_rand_meta,
-    impl_aten=_philox_rand,
-    tags=(torch.Tag.nondeterministic_seeded,),
-    doc="",
-)
 
 class PhiloxRandomState:
     # These are the running seed and offset. We check them if rng state has been
@@ -233,23 +168,34 @@ class PhiloxRandomState:
                 cls.accumulated_offset += offset_jump
         return cls.seed_arg, torch.add(cls.base_offset_arg, old_offset)
 
+def get_default_stride(size):
+    """
+    A helper function to get the strides for a contiguous tensor of a given
+    shape.
+    """
+    stride = [1] * len(size) + [1]
+    for idx in reversed(range(len(size))):
+        stride[idx] = stride[idx + 1] * size[idx]
+    stride = stride[1:]
+    return stride
 
-class FunctionalizeRngOpsMode(TorchDispatchMode):
-    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-        _, new_kwargs = normalize_function(
-            func, args=args, kwargs=kwargs, normalize_to_only_use_kwargs=True
-        )
-        if func in [aten.rand.default]:
-            shape = args[0]
-            seed, offset = PhiloxRandomState.get_state_args(shape)
-            device = new_kwargs["device"] or "cpu"
-            dtype = new_kwargs["dtype"] or torch.float32
-            stride = get_default_stride(shape)
-            r = philox_rand(shape, seed, offset, stride, device, dtype)
-            return r
-        elif func in [aten.rand_like.default]:
-            x = args[0]
-            seed, offset = PhiloxRandomState.get_state_args(x.shape)
-            r = philox_rand(x.shape, seed, offset, x.stride(), x.device, x.dtype)
-            return r
-        return func(*args, **kwargs)
+
+
+@register_decomposition(aten.rand)
+def rand(shape, dtype=None, layout=torch.strided, device=None, pin_memory=False):
+    device = device or "cpu"
+    seed, offset = PhiloxRandomState.get_state_args(shape)
+    dtype = dtype or torch.float32
+    stride = get_default_stride(shape)
+    philox_rand = torch.ops.prims.philox_rand
+    r = philox_rand(shape, seed, offset, stride, device, dtype)
+    return r
+
+    # return out_grad * (1 - y * y).conj_physical()
+
+@register_decomposition(aten.rand_like)
+def rand_like(x: torch.Tensor, dtype=None, layout=None, device=None, pin_memory=False, memory_format=torch.preserve_format):
+    seed, offset = PhiloxRandomState.get_state_args(x.shape)
+    philox_rand = torch.ops.prims.philox_rand
+    r = philox_rand(x.shape, seed, offset, x.stride(), x.device, x.dtype)
+    return r
