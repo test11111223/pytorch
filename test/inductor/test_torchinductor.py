@@ -4682,6 +4682,16 @@ class CommonTemplate:
 
         self.common(fn, [torch.randn(55)], assert_equal=False)
 
+    def test_dropout_trivial(self):
+        def fn1(a):
+            return torch.nn.functional.dropout(a, 0.0, True)
+
+        def fn2(a):
+            return torch.nn.functional.dropout(a, 1.0, True)
+
+        self.common(fn1, [torch.randn(55)], assert_equal=False)
+        self.common(fn2, [torch.randn(55)], assert_equal=False)
+
     @config.patch({"triton.cudagraphs": True})
     def test_dropout(self):
         random.seed(1234)
