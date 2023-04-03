@@ -172,6 +172,8 @@ class WrapperCodeGen(CodeGen):
         self.ending = ""
         self.comment = "#"
         self.namespace = ""
+        self.size = "size()"
+        self.stride = "stride()"
 
         self.set_header()
         self.write_prefix()
@@ -374,13 +376,15 @@ class WrapperCodeGen(CodeGen):
 
         @functools.lru_cache(None)
         def sizeof(name):
-            code.writeline(f"{self.declare}{name}_size = {name}.size(){self.ending}")
+            code.writeline(
+                f"{self.declare}{name}_size = {name}.{self.size}{self.ending}"
+            )
             return f"{name}_size"
 
         @functools.lru_cache(None)
         def strideof(name):
             code.writeline(
-                f"{self.declare}{name}_stride = {name}.stride(){self.ending}"
+                f"{self.declare}{name}_stride = {name}.{self.stride}{self.ending}"
             )
             return f"{name}_stride"
 
@@ -685,6 +689,8 @@ class CppWrapperCodeGen(WrapperCodeGen):
         self.ending = ";"
         self.comment = "//"
         self.namespace = "at::"
+        self.size = "sizes()"
+        self.stride = "strides()"
 
     def seed(self):
         """
@@ -754,10 +760,25 @@ class CppWrapperCodeGen(WrapperCodeGen):
         self.prefix.splice(f"{CppWrapperCodeGen.decl_str} {{")
         with self.wrapper_call.indent():
             if inputs_len != 0:
-                inputs_keys_str = ", ".join(V.graph.graph_inputs.keys())
-                self.wrapper_call.writeline(f"at::Tensor {inputs_keys_str};")
                 for idx, input_key in enumerate(V.graph.graph_inputs.keys()):
-                    self.wrapper_call.writeline(f"{input_key} = args[{idx}];")
+                    if isinstance(V.graph.graph_inputs[input_key], sympy.Expr):
+                        from ..graph import may_get_constant_buffer_dtype
+                        from .cpp import DTYPE_TO_CPP
+
+                        dtype = may_get_constant_buffer_dtype(
+                            V.graph.graph_inputs[input_key]
+                        )
+                        assert (
+                            dtype is not None
+                        ), "Fails to get the dtype of the sympy.Expr"
+                        cpp_dtype = DTYPE_TO_CPP[dtype]
+                        self.wrapper_call.writeline(f"{cpp_dtype} {input_key};")
+                        self.wrapper_call.writeline(
+                            f"{input_key} = args[{idx}].item<{cpp_dtype}>();"
+                        )
+                    else:
+                        self.wrapper_call.writeline(f"at::Tensor {input_key};")
+                        self.wrapper_call.writeline(f"{input_key} = args[{idx}];")
 
             for name in V.graph.randomness_seeds:
                 self.wrapper_call.writeline(f"at::Tensor {name};")
@@ -843,7 +864,8 @@ class CppWrapperCodeGen(WrapperCodeGen):
             f"""
             def _wrap_func(f):
                 def g(args):
-                    return f(args)
+                    args_tensor = [arg if isinstance(arg, torch.Tensor) else torch.tensor(arg) for arg in args]
+                    return f(args_tensor)
                 return g
             call = _wrap_func(module.call_{self._call_func_id})
             """
@@ -861,6 +883,11 @@ class CppWrapperCodeGen(WrapperCodeGen):
         else:
             args.insert(0, f"{codegen_reference}")
         self.writeline(f"{cpp_kernel}({', '.join(args)});")
+
+    def codegen_sizevar(self, x: Expr) -> str:
+        from .cpp import cexpr
+
+        return cexpr(V.graph.sizevars.simplify(x))
 
     def codegen_shape_tuple(self, shape: Tuple[Expr, ...]) -> str:
         parts = list(map(self.codegen_sizevar, shape))
