@@ -135,7 +135,9 @@
 #endif //_MSC_VER
 
 // Direct port of LLVM_ATTRIBUTE_USED.
-#if __has_attribute(used)
+#ifdef(_MSC_VER)
+#define C10_USED
+#elif __has_attribute(used)
 #define C10_USED __attribute__((__used__))
 #else
 #define C10_USED
